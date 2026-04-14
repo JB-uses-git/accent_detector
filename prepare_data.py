@@ -75,11 +75,20 @@ def load_accent_data(dry_run: bool = False) -> Dataset:
         logger.info("  Converting ClassLabel integers to string names...")
         label_names = accent_feature.names
         logger.info("  Available accents: %s", label_names)
+
+        # cast_column to string just converts 15 → "15", NOT to the name.
+        # We must manually map using the names list.
+        def convert_class_label(example):
+            example["accent"] = label_names[example["accent"]]
+            return example
+
+        ds = ds.map(convert_class_label)
+        # Now cast column type so HF doesn't treat it as ClassLabel anymore
         ds = ds.cast_column("accent", Value("string"))
-        # After cast, values become the string names automatically
+
         # Verify
         sample_accents = set(ds[:10]["accent"])
-        logger.info("  Sample accent values after cast: %s", sample_accents)
+        logger.info("  Sample accent values after conversion: %s", sample_accents)
 
     # Filter to target accents
     ds = ds.filter(
