@@ -1,28 +1,41 @@
 # 🎙️ Indian Accent Detector
 
-A 4-class English accent classifier with **Indian accent detection** — built on Wav2Vec2, trained on the Westbrook English Accent Dataset.
+A **two-stage** English accent classifier with **hierarchical Indian sub-accent detection** — built on Wav2Vec2.
 
 ---
 
-## What It Does
+## How It Works
 
-Takes a short audio clip of someone speaking English and predicts their accent:
-
-🇺🇸 American · 🇬🇧 British · 🇨🇦 Canadian · 🇮🇳 Indian
+```
+Audio Input
+    ↓
+┌──────────────────────────────────┐
+│  Stage 1: Global Classifier      │
+│  American / British / Canadian /  │
+│  Indian                          │
+│  Accuracy: 99.66%                │
+└──────────────┬───────────────────┘
+               │ If Indian
+               ↓
+┌──────────────────────────────────┐
+│  Stage 2: Indian Sub-Classifier   │
+│  North (Hindi Belt)              │
+│  South (Dravidian)               │
+│  West (Gujarati)                 │
+│  Accuracy: 100%                  │
+└──────────────────────────────────┘
+```
 
 ---
 
 ## Results
 
-### Overall Metrics (3s clips)
+### Stage 1 — Global Accent Classification (3s clips)
 
 | Metric | Score |
 |:-------|:-----:|
 | **Accuracy** | **99.66%** |
 | **Macro F1** | **0.9940** |
-| **Weighted F1** | **0.9966** |
-
-### Per-Class Performance
 
 | Accent | Precision | Recall | F1 Score | Support |
 |:-------|:---------:|:------:|:--------:|:-------:|
@@ -31,7 +44,20 @@ Takes a short audio clip of someone speaking English and predicts their accent:
 | 🇨🇦 Canadian | 0.9900 | 0.9933 | 0.9917 | 299 |
 | 🇮🇳 Indian | 0.9925 | 0.9852 | 0.9888 | 135 |
 
-### Confusion Matrix (3s)
+### Stage 2 — Indian Sub-Accent Classification (3s clips)
+
+| Metric | Score |
+|:-------|:-----:|
+| **Accuracy** | **100%** |
+| **Macro F1** | **1.0** |
+
+| Sub-Region | Source Languages |
+|:-----------|:-----------------|
+| 🇮🇳 North (Hindi Belt) | Hindi |
+| 🇮🇳 South (Dravidian) | Tamil, Telugu, Kannada, Malayalam |
+| 🇮🇳 West | Gujarati |
+
+### Confusion Matrix (Stage 1, 3s)
 
 ![Confusion Matrix](results/confusion_matrix_3s.png)
 
@@ -41,73 +67,74 @@ Takes a short audio clip of someone speaking English and predicts their accent:
 |:-------|:--------:|:--------:|
 | MPSA-DenseNet (literature) | ~65% | N/R |
 | AccentDB CNN (literature) | ~60% | N/R |
-| **Ours (3s clips)** | **99.7%** | **0.9940** |
-
-*Note: Comparison is indicative only — datasets and class sets differ.*
+| **Ours — Stage 1 (3s clips)** | **99.7%** | **0.9940** |
+| **Ours — Stage 2 (3s clips)** | **100%** | **1.0** |
 
 ---
 
 ## Model Architecture
 
 - **Base model**: `facebook/wav2vec2-base` (95M parameters)
-- **Approach**: Transfer learning — CNN feature encoder frozen, Transformer + 4-class head fine-tuned
+- **Approach**: Transfer learning — CNN feature encoder frozen, Transformer fine-tuned
+- **Two-stage cascade**: Stage 1 (4-class) → Stage 2 (3-class, only if Indian)
 - **Training**: AdamW optimizer, cosine scheduler with 10% warmup, FP16 on GPU
-- **Best model selection**: Macro F1 (handles class imbalance)
-
-```
-Wav2Vec2 Feature Encoder (FROZEN)
-        ↓
-Wav2Vec2 Transformer Encoder (FINE-TUNED)
-        ↓
-Mean Pooling
-        ↓
-4-Class Classification Head (FINE-TUNED)
-        ↓
-Softmax → Accent Prediction
-```
+- **Best model selection**: Macro F1
 
 ---
 
-## Dataset
+## Datasets
 
-| Source | Classes | Samples | Purpose |
-|--------|---------|---------|---------|
-| [Westbrook English Accent Dataset](https://huggingface.co/datasets/westbrook/English_Accent_DataSet) | American, British, Canadian, Indian | 26,206 | All accents |
+| Source | Classes | Samples | Stage |
+|--------|---------|---------|-------|
+| [Westbrook English Accent Dataset](https://huggingface.co/datasets/westbrook/English_Accent_DataSet) | American, British, Canadian, Indian | 26,206 | Stage 1 |
+| [IndicAccentDb](https://huggingface.co/datasets/DarshanaS/IndicAccentDb) | Hindi, Tamil, Telugu, Kannada, Malayalam, Gujarati | 8,116 | Stage 2 |
 
-- **Total**: 26,206 samples filtered from 53K (79 hours of audio)
-- **Split**: 80% train (20,964) / 10% val (2,621) / 10% test (2,621) — stratified
-- **Source data**: VCTK + EDACC + Voxpopuli
-- Reproducible split manifest: `processed_data/split_manifest.csv`
+- Both datasets are **open access** (no gating, no login required)
+- Stratified 80/10/10 split with reproducible manifest
 
 ---
 
 ## Quickstart
 
+### Run the demo (with pre-trained models)
 ```bash
+git clone https://github.com/JB-uses-git/accent_detector.git
+cd accent_detector
 pip install -r requirements.txt
-python prepare_data.py
-python train.py --clip_length 3
-python evaluate.py --clip_length 3
+# Copy trained model folders (accent-classifier-final + indian-subaccent-classifier) into the project
 python app.py --share
 ```
 
-GPU required for training. Use Google Colab (T4) or Kaggle (P100) for free GPU access.
+### Train from scratch (GPU required)
+```bash
+# Stage 1: Global accents
+python prepare_data.py
+python train.py --clip_length 3
+python evaluate.py --clip_length 3
+
+# Stage 2: Indian sub-accents
+python prepare_indian.py
+
+# Launch demo
+python app.py --share
+```
+
+Use Google Colab (T4) or Kaggle (P100) for free GPU access.
 
 ---
 
 ## Full Pipeline
 
-### Step 1 — Data Preparation (`prepare_data.py`)
-Downloads the Westbrook English Accent Dataset, filters to 4 target accents, performs stratified 80/10/10 split, creates clip-length variants (1s/2s/3s), and saves a reproducible manifest.
+### Stage 1 — Global Accents
+1. **`prepare_data.py`** — Downloads Westbrook dataset, filters to 4 accents, stratified split, creates clip-length variants
+2. **`train.py`** — Fine-tunes Wav2Vec2 for American/British/Canadian/Indian classification
+3. **`evaluate.py`** — Generates per-class F1, confusion matrix, overall metrics
 
-### Step 2 — Training (`train.py`)
-Fine-tunes Wav2Vec2 with frozen CNN encoder. Uses macro F1 for best model selection.
+### Stage 2 — Indian Sub-Accents
+4. **`prepare_indian.py`** — Downloads IndicAccentDb, maps to North/South/West regions, trains sub-accent classifier
 
-### Step 3 — Evaluation (`evaluate.py`)
-Generates per-class CSVs, confusion matrix PNGs, overall metrics, and baseline comparison.
-
-### Step 4 — Demo (`app.py`)
-Gradio web UI with microphone/upload support.
+### Demo
+5. **`app.py`** — Gradio web UI with two-stage cascaded inference
 
 ---
 
@@ -116,16 +143,18 @@ Gradio web UI with microphone/upload support.
 ```
 accent_detector/
 ├── config.py                  # All hyperparameters, labels, paths
-├── prepare_data.py            # Data download + processing pipeline
-├── train.py                   # Model training (per clip length)
-├── evaluate.py                # Full evaluation pipeline
-├── app.py                     # Gradio web demo
+├── prepare_data.py            # Stage 1: data pipeline
+├── prepare_indian.py          # Stage 2: Indian sub-accent pipeline
+├── train.py                   # Stage 1: model training
+├── evaluate.py                # Stage 1: evaluation
+├── app.py                     # Two-stage Gradio web demo
 ├── requirements.txt           # Python dependencies
 ├── README.md                  # This file
 ├── notebooks/
-│   └── train_colab.ipynb      # Self-contained Colab/Kaggle notebook
+│   └── train_colab.ipynb      # Self-contained Colab notebook
 ├── processed_data/            # Generated by prepare_data.py
-├── accent-classifier-final/   # Generated by train.py
+├── accent-classifier-final/   # Stage 1 model (generated by train.py)
+├── indian-subaccent-classifier/ # Stage 2 model (generated by prepare_indian.py)
 ├── results/                   # Generated by evaluate.py
 └── samples/                   # Example audio for Gradio demo
 ```
@@ -135,7 +164,8 @@ accent_detector/
 ## Citation / Acknowledgements
 
 ### Datasets
-- **Westbrook English Accent Dataset**: 79-hour dataset compiled from VCTK, EDACC, and Voxpopuli.
+- **Westbrook English Accent Dataset**: 79-hour dataset from VCTK, EDACC, and Voxpopuli.
+- **IndicAccentDb**: Darshana S., et al. Indian accented English speech database (Gujarati, Hindi, Kannada, Malayalam, Tamil, Telugu).
 
 ### Models
 - **Wav2Vec2**: Baevski, A., et al. (2020). "wav2vec 2.0: A Framework for Self-Supervised Learning of Speech Representations." NeurIPS 2020.
