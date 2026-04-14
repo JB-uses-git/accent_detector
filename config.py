@@ -46,7 +46,7 @@ RESULTS_DIR = "results"
 SAMPLES_DIR = "samples"
 
 # ─── Dataset Sources ─────────────────────────────────────────────────────────
-COMMON_VOICE_DATASET = "mozilla-foundation/common_voice_13_0"
+COMMON_VOICE_DATASET = "mozilla-foundation/common_voice_17_0"
 COMMON_VOICE_LANG = "en"
 SVARAH_DATASET = "iitb-monolingual/svarah"
 

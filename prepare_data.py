@@ -71,7 +71,6 @@ def load_common_voice(dry_run: bool = False) -> Dataset:
         COMMON_VOICE_DATASET,
         COMMON_VOICE_LANG,
         split="train",
-        trust_remote_code=True,
     )
     logger.info("  Loaded %d total train samples from Common Voice", len(ds))
 
@@ -112,7 +111,7 @@ def load_svarah(dry_run: bool = False) -> Dataset:
     logger.info("STEP B — Loading Svarah (Indian sub-accents)")
 
     try:
-        ds = load_dataset(SVARAH_DATASET, split="train", trust_remote_code=True)
+        ds = load_dataset(SVARAH_DATASET, split="train")
     except Exception as e:
         logger.warning(
             "⚠ Failed to load Svarah dataset: %s\n"
