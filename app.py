@@ -153,10 +153,12 @@ def classify_accent(audio_path: str, clip_length_str: str):
     )
 
     # ── Stage 1: Global classification ──
+    # Temperature scaling: T > 1 makes predictions less extreme / more natural
+    TEMPERATURE = 3.0
     with torch.no_grad():
         logits = model(**inputs).logits
 
-    probs = torch.softmax(logits, dim=-1)[0]
+    probs = torch.softmax(logits / TEMPERATURE, dim=-1)[0]
     predicted_idx = probs.argmax().item()
     predicted_label = ACCENT_LABELS[predicted_idx]
 
@@ -167,7 +169,7 @@ def classify_accent(audio_path: str, clip_length_str: str):
         if indian_model is not None:
             with torch.no_grad():
                 indian_logits = indian_model(**inputs).logits
-            indian_probs = torch.softmax(indian_logits, dim=-1)[0]
+            indian_probs = torch.softmax(indian_logits / TEMPERATURE, dim=-1)[0]
 
             # Build combined result with Indian sub-accents
             result = {}
