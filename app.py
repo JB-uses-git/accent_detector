@@ -178,13 +178,13 @@ def build_demo(share: bool = False):
             """
             # 🎙️ Indian Accent Detector
 
-            A 4-class English accent classifier with **Indian accent detection**.
+            A 6-class English accent classifier with **hierarchical Indian sub-accent detection**.
 
             ### 🔬 Research Differentiators
             1. **Short-clip benchmarking**: accuracy curves across 1s, 2s, and 3s clips — 
                nobody in the literature benchmarks on clips this short
-            2. **Hierarchical Indian sub-accents**: North / South / East / West Indian classification 
-               using the Svarah dataset
+            2. **Hierarchical Indian sub-accents**: North / South / West Indian classification 
+               using the IndicAccentDb dataset
             3. **Standardized evaluation**: per-class F1, confusion matrices, and clip-length curves 
                on a single reproducible public split
 
@@ -222,7 +222,7 @@ def build_demo(share: bool = False):
 
             with gr.Column(scale=1):
                 output_label = gr.Label(
-                    num_top_classes=4,
+                    num_top_classes=6,
                     label="🌍 Accent Prediction",
                 )
                 accuracy_note = gr.Textbox(
@@ -249,11 +249,12 @@ def build_demo(share: bool = False):
         gr.Markdown(
             """
             ---
-            **Supported accents**: 🇺🇸 American · 🇬🇧 British · 🇨🇦 Canadian · 🇮🇳 Indian
+            **Supported accents**: 🇺🇸 American · 🇬🇧 British · 🇨🇦 Canadian · 
+            🇮🇳 Indian-North · 🇮🇳 Indian-South · 🇮🇳 Indian-West
 
             *Powered by [Wav2Vec2](https://huggingface.co/facebook/wav2vec2-base) · 
-            Trained on [Common Voice](https://commonvoice.mozilla.org/) + 
-            [Svarah](https://huggingface.co/datasets/iitb-monolingual/svarah)*
+            Trained on [Westbrook](https://huggingface.co/datasets/westbrook/English_Accent_DataSet) + 
+            [IndicAccentDb](https://huggingface.co/datasets/DarshanaS/IndicAccentDb)*
             """
         )
 

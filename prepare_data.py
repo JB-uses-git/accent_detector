@@ -1,9 +1,10 @@
 """
 Phase 2 — Data Preparation Pipeline.
 
-Loads Westbrook English Accent Dataset, filters to target accents,
-creates 3 clip-length variants, performs stratified split, and saves
-reproducible processed datasets.
+Loads Westbrook English Accent Dataset (global accents) and
+IndicAccentDb (Indian sub-accents), merges them, creates clip-length
+variants, performs stratified split, and saves reproducible processed
+datasets.
 
 Usage:
     python prepare_data.py [--dry_run]
@@ -15,6 +16,7 @@ import json
 import logging
 import os
 import sys
+from collections import Counter, defaultdict
 
 import numpy as np
 import pandas as pd
@@ -23,6 +25,7 @@ from datasets import (
     Dataset,
     DatasetDict,
     Value,
+    concatenate_datasets,
     load_dataset,
 )
 from sklearn.model_selection import train_test_split
@@ -35,6 +38,8 @@ from config import (
     CLIP_LENGTHS,
     DRY_RUN_SAMPLES_PER_CLASS,
     ID2LABEL,
+    INDIAN_ACCENT_DATASET,
+    INDIAN_ACCENT_MAP,
     LABEL2ID,
     MODEL_NAME,
     PROCESSED_DATA_DIR,
@@ -56,38 +61,32 @@ logger = logging.getLogger(__name__)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# STEP A — Load Westbrook English Accent Dataset
+# STEP A — Load Global Accents (Westbrook)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def load_accent_data(dry_run: bool = False) -> Dataset:
-    """Load Westbrook dataset, convert ClassLabel to string, filter accents."""
-    logger.info("STEP A — Loading Westbrook English Accent Dataset")
+def load_global_accents() -> Dataset:
+    """Load Westbrook dataset for American, British, Canadian accents."""
+    logger.info("STEP A.1 — Loading Westbrook English Accent Dataset")
 
     ds = load_dataset(ACCENT_DATASET, split="train")
     logger.info("  Loaded %d total samples", len(ds))
 
-    # The 'accent' column is a ClassLabel (integer-encoded).
-    # Convert to string names so our filter/mapping works.
+    # Convert ClassLabel integers to string names
     accent_feature = ds.features["accent"]
-    logger.info("  Accent feature type: %s", type(accent_feature).__name__)
-
     if hasattr(accent_feature, "int2str"):
-        logger.info("  Converting ClassLabel integers to string names...")
         label_names = accent_feature.names
         logger.info("  Available accents: %s", label_names)
 
-        # ClassLabel auto-encodes strings back to ints, so .map() won't work.
-        # Instead: extract ints, convert to names, remove column, re-add as strings.
+        # ClassLabel auto-encodes strings back to ints, so use remove+add approach
         accent_ints = ds["accent"]
         accent_strings = [label_names[i] for i in accent_ints]
         ds = ds.remove_columns(["accent"])
         ds = ds.add_column("accent", accent_strings)
 
-        # Verify
         sample_accents = set(ds[:10]["accent"])
-        logger.info("  Sample accent values after conversion: %s", sample_accents)
+        logger.info("  Sample values after conversion: %s", sample_accents)
 
-    # Filter to target accents
+    # Filter to target global accents (American, English, Canadian)
     ds = ds.filter(
         lambda batch: [a in TARGET_ACCENTS for a in batch["accent"]],
         batched=True,
@@ -96,9 +95,7 @@ def load_accent_data(dry_run: bool = False) -> Dataset:
     logger.info("  After accent filter: %d samples", len(ds))
 
     if len(ds) == 0:
-        # Debug: print what values we actually have
-        logger.error("  No samples matched! Check accent values vs TARGET_ACCENTS=%s", TARGET_ACCENTS)
-        raise ValueError("No samples matched the target accents. Check the accent mapping.")
+        raise ValueError("No samples matched the target accents.")
 
     # Map accent names: American→american, English→british, etc.
     def map_accent(example):
@@ -109,29 +106,119 @@ def load_accent_data(dry_run: bool = False) -> Dataset:
 
     # Keep only needed columns
     columns_to_keep = ["audio", "accent"]
-    if "raw_text" in ds.column_names:
-        ds = ds.rename_column("raw_text", "sentence")
-        columns_to_keep.append("sentence")
-
     columns_to_remove = [c for c in ds.column_names if c not in columns_to_keep]
     ds = ds.remove_columns(columns_to_remove)
 
-    if dry_run:
-        ds = _subsample_per_class(ds, DRY_RUN_SAMPLES_PER_CLASS)
-
-    _log_class_distribution(ds, "Filtered dataset")
+    _log_class_distribution(ds, "Global accents")
     return ds
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# STEP B — Create 3 clip-length variants
+# STEP A.2 — Load Indian Sub-Accents (IndicAccentDb)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def load_indian_accents() -> Dataset:
+    """Load IndicAccentDb for Indian sub-regional accents."""
+    logger.info("STEP A.2 — Loading IndicAccentDb (Indian sub-accents)")
+
+    ds = load_dataset(INDIAN_ACCENT_DATASET, split="train")
+    logger.info("  Loaded %d total samples", len(ds))
+    logger.info("  Column names: %s", ds.column_names)
+
+    # Identify the label column (could be 'label' or 'accent')
+    label_col = None
+    for candidate in ["label", "accent", "class"]:
+        if candidate in ds.column_names:
+            label_col = candidate
+            break
+
+    if label_col is None:
+        raise ValueError(f"Cannot find label column. Available: {ds.column_names}")
+
+    logger.info("  Using label column: '%s'", label_col)
+
+    # Convert ClassLabel to string if needed
+    label_feature = ds.features[label_col]
+    if hasattr(label_feature, "int2str"):
+        label_names = label_feature.names
+        logger.info("  Available Indian accent labels: %s", label_names)
+
+        label_ints = ds[label_col]
+        label_strings = [label_names[i] for i in label_ints]
+        ds = ds.remove_columns([label_col])
+        ds = ds.add_column("accent_raw", label_strings)
+    else:
+        # Already strings
+        ds = ds.rename_column(label_col, "accent_raw")
+
+    # Normalize label strings (lowercase, strip)
+    raw_labels = ds["accent_raw"]
+    normalized = [s.strip().lower().replace(" ", "_") for s in raw_labels]
+    ds = ds.remove_columns(["accent_raw"])
+    ds = ds.add_column("accent_raw", normalized)
+
+    unique_raw = set(normalized)
+    logger.info("  Normalized unique labels: %s", unique_raw)
+
+    # Map to our Indian sub-regions
+    mapped_accents = []
+    unmapped = set()
+    for raw in ds["accent_raw"]:
+        if raw in INDIAN_ACCENT_MAP:
+            mapped_accents.append(INDIAN_ACCENT_MAP[raw])
+        else:
+            unmapped.add(raw)
+            mapped_accents.append(None)
+
+    if unmapped:
+        logger.warning("  Unmapped labels (will be dropped): %s", unmapped)
+
+    ds = ds.remove_columns(["accent_raw"])
+    ds = ds.add_column("accent", mapped_accents)
+
+    # Drop unmapped samples
+    ds = ds.filter(lambda x: x["accent"] is not None)
+    logger.info("  After mapping: %d samples", len(ds))
+
+    # Keep only needed columns
+    columns_to_keep = ["audio", "accent"]
+    columns_to_remove = [c for c in ds.column_names if c not in columns_to_keep]
+    if columns_to_remove:
+        ds = ds.remove_columns(columns_to_remove)
+
+    _log_class_distribution(ds, "Indian sub-accents")
+    return ds
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# STEP A.3 — Merge Datasets
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def merge_datasets(global_ds: Dataset, indian_ds: Dataset) -> Dataset:
+    """Merge global and Indian sub-accent datasets."""
+    logger.info("STEP A.3 — Merging datasets")
+
+    # Ensure both have same Audio feature format
+    if "audio" in global_ds.features and "audio" in indian_ds.features:
+        # Cast both to same Audio format
+        global_ds = global_ds.cast_column("audio", Audio())
+        indian_ds = indian_ds.cast_column("audio", Audio())
+
+    merged = concatenate_datasets([global_ds, indian_ds])
+    logger.info("  Merged total: %d samples", len(merged))
+    _log_class_distribution(merged, "Merged dataset")
+    return merged
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# STEP B — Create clip-length variants
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def create_clip_length_variants(
     dataset_dict: DatasetDict,
     extractor: Wav2Vec2FeatureExtractor,
 ) -> dict:
-    """Create processed datasets for each clip length (1s, 2s, 3s)."""
+    """Create processed datasets for each clip length."""
     logger.info("STEP B — Creating clip-length variants")
 
     clip_datasets = {}
@@ -145,7 +232,6 @@ def create_clip_length_variants(
             audio_arrays = []
             for audio in batch["audio"]:
                 arr = audio["array"]
-                # Truncate or zero-pad to exact clip length
                 if len(arr) > _max_samples:
                     arr = arr[:_max_samples]
                 elif len(arr) < _max_samples:
@@ -176,7 +262,6 @@ def create_clip_length_variants(
             processed_dict[split_name] = processed
             logger.info("    %s: %d samples", split_name, len(processed))
 
-        # Save to disk
         save_path = os.path.join(PROCESSED_DATA_DIR, f"clips_{clip_len}s")
         processed_dict.save_to_disk(save_path)
         logger.info("    Saved to %s", save_path)
@@ -196,7 +281,6 @@ def stratified_split(dataset: Dataset) -> DatasetDict:
     labels = dataset["accent"]
     indices = list(range(len(dataset)))
 
-    # First split: 80% train, 20% temp
     train_idx, temp_idx = train_test_split(
         indices,
         test_size=(VAL_RATIO + TEST_RATIO),
@@ -204,7 +288,6 @@ def stratified_split(dataset: Dataset) -> DatasetDict:
         random_state=SEED,
     )
 
-    # Second split: 50/50 of temp → val and test
     temp_labels = [labels[i] for i in temp_idx]
     val_idx, test_idx = train_test_split(
         temp_idx,
@@ -219,7 +302,7 @@ def stratified_split(dataset: Dataset) -> DatasetDict:
 
     logger.info("  Train: %d | Val: %d | Test: %d", len(train_ds), len(val_ds), len(test_ds))
 
-    # Generate manifest CSV with sha256 hashes
+    # Generate manifest CSV
     manifest_rows = []
     for split_name, split_ds, split_indices in [
         ("train", train_ds, train_idx),
@@ -297,15 +380,9 @@ def validate_splits(clip_datasets: dict):
 # Helpers
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _get_class_counts(ds: Dataset) -> dict:
-    """Get per-class counts from a dataset."""
-    from collections import Counter
-    return dict(Counter(ds["accent"]))
-
-
 def _log_class_distribution(ds: Dataset, name: str):
     """Log the class distribution of a dataset."""
-    counts = _get_class_counts(ds)
+    counts = dict(Counter(ds["accent"]))
     total = sum(counts.values())
     logger.info("  %s distribution (%d total):", name, total)
     for label in ACCENT_LABELS:
@@ -316,8 +393,6 @@ def _log_class_distribution(ds: Dataset, name: str):
 
 def _subsample_per_class(ds: Dataset, n: int) -> Dataset:
     """Subsample to at most n examples per class."""
-    from collections import defaultdict
-
     class_indices = defaultdict(list)
     for i, accent in enumerate(ds["accent"]):
         class_indices[accent].append(i)
@@ -354,15 +429,24 @@ def main():
 
     np.random.seed(SEED)
 
-    # ── Step A: Load and filter ──
-    ds = load_accent_data(dry_run=args.dry_run)
+    # ── Step A.1: Load global accents ──
+    global_ds = load_global_accents()
+
+    # ── Step A.2: Load Indian sub-accents ──
+    indian_ds = load_indian_accents()
+
+    # ── Step A.3: Merge ──
+    merged_ds = merge_datasets(global_ds, indian_ds)
+
+    if args.dry_run:
+        merged_ds = _subsample_per_class(merged_ds, DRY_RUN_SAMPLES_PER_CLASS)
 
     # ── Resample audio to 16kHz ──
     logger.info("Resampling all audio to %d Hz...", SAMPLE_RATE)
-    ds = ds.cast_column("audio", Audio(sampling_rate=SAMPLE_RATE))
+    merged_ds = merged_ds.cast_column("audio", Audio(sampling_rate=SAMPLE_RATE))
 
     # ── Step C: Stratified split ──
-    split_dict = stratified_split(ds)
+    split_dict = stratified_split(merged_ds)
 
     # ── Step B: Create clip-length variants ──
     extractor = Wav2Vec2FeatureExtractor.from_pretrained(MODEL_NAME)
