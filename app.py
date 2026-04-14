@@ -1,12 +1,8 @@
 """
-Phase 5 — Gradio Demo for Indian Accent Detection.
+Phase 5 — Gradio Demo for Indian Accent Detection (Two-Stage).
 
-Provides a web UI with:
-  - Audio input (microphone or file upload)
-  - Clip length selector (1s / 2s / 3s)
-  - Top prediction with confidence
-  - All 8 class probabilities
-  - Note about accuracy at selected clip length
+Stage 1: Classify as American / British / Canadian / Indian
+Stage 2: If Indian → classify as North / South / West
 
 Usage:
     python app.py [--share] [--dry_run]
@@ -28,6 +24,9 @@ from config import (
     ACCENT_LABELS,
     CLIP_LENGTHS,
     DISPLAY_LABELS,
+    INDIAN_DISPLAY_LABELS,
+    INDIAN_MODEL_OUTPUT_DIR,
+    INDIAN_SUB_LABELS,
     MODEL_NAME,
     MODEL_OUTPUT_DIR,
     RESULTS_DIR,
@@ -46,11 +45,12 @@ logger = logging.getLogger(__name__)
 
 # ─── Model Cache ──────────────────────────────────────────────────────────────
 _model_cache = {}
+_indian_model_cache = {}
 _extractor = None
 
 
 def get_extractor():
-    """Get or load the feature extractor (shared across all clip lengths)."""
+    """Get or load the feature extractor (shared across all models)."""
     global _extractor
     if _extractor is None:
         logger.info("Loading feature extractor from %s...", MODEL_NAME)
@@ -59,17 +59,31 @@ def get_extractor():
 
 
 def get_model(clip_length: int):
-    """Get or load a model for a specific clip length (cached)."""
+    """Get or load Stage 1 model (global accent classifier)."""
     if clip_length not in _model_cache:
         model_path = os.path.join(MODEL_OUTPUT_DIR, f"clips_{clip_length}s")
         if not os.path.exists(model_path):
-            logger.error("Model not found at %s", model_path)
+            logger.error("Stage 1 model not found at %s", model_path)
             return None
-        logger.info("Loading model from %s...", model_path)
+        logger.info("Loading Stage 1 model from %s...", model_path)
         model = Wav2Vec2ForSequenceClassification.from_pretrained(model_path)
         model.eval()
         _model_cache[clip_length] = model
     return _model_cache[clip_length]
+
+
+def get_indian_model(clip_length: int):
+    """Get or load Stage 2 model (Indian sub-accent classifier)."""
+    if clip_length not in _indian_model_cache:
+        model_path = os.path.join(INDIAN_MODEL_OUTPUT_DIR, f"clips_{clip_length}s")
+        if not os.path.exists(model_path):
+            logger.warning("Stage 2 model not found at %s — sub-accents unavailable", model_path)
+            return None
+        logger.info("Loading Stage 2 model from %s...", model_path)
+        model = Wav2Vec2ForSequenceClassification.from_pretrained(model_path)
+        model.eval()
+        _indian_model_cache[clip_length] = model
+    return _indian_model_cache[clip_length]
 
 
 def get_accuracy_note(clip_length: int) -> str:
@@ -87,28 +101,27 @@ def get_accuracy_note(clip_length: int) -> str:
 
 
 def classify_accent(audio_path: str, clip_length_str: str):
-    """Classify accent from audio file."""
+    """Two-stage accent classification."""
     if audio_path is None:
         return (
             {label: 0.0 for label in DISPLAY_LABELS},
             "⚠️ No audio provided. Please record or upload audio."
         )
 
-    # Parse clip length
     clip_length = int(clip_length_str.replace("s", ""))
     max_samples = SAMPLE_RATE * clip_length
 
-    # Load model
+    # Load Stage 1 model
     model = get_model(clip_length)
     if model is None:
         return (
             {label: 0.0 for label in DISPLAY_LABELS},
-            f"❌ Model for {clip_length}s clips not found. Train the model first."
+            f"❌ Stage 1 model for {clip_length}s clips not found. Train the model first."
         )
 
     extractor = get_extractor()
 
-    # Load and resample audio to 16 kHz
+    # Load and resample audio
     try:
         audio, sr = librosa.load(audio_path, sr=SAMPLE_RATE)
     except Exception as e:
@@ -117,14 +130,13 @@ def classify_accent(audio_path: str, clip_length_str: str):
             f"❌ Error loading audio: {str(e)}"
         )
 
-    # Reject very short clips (< 0.3s)
     if len(audio) < SAMPLE_RATE * 0.3:
         return (
             {label: 0.0 for label in DISPLAY_LABELS},
             "⚠️ Audio too short. Please provide at least 0.3 seconds."
         )
 
-    # Truncate or pad to selected clip length
+    # Truncate or pad
     if len(audio) > max_samples:
         audio = audio[:max_samples]
     elif len(audio) < max_samples:
@@ -140,53 +152,76 @@ def classify_accent(audio_path: str, clip_length_str: str):
         truncation=True,
     )
 
-    # Inference
+    # ── Stage 1: Global classification ──
     with torch.no_grad():
         logits = model(**inputs).logits
 
     probs = torch.softmax(logits, dim=-1)[0]
+    predicted_idx = probs.argmax().item()
+    predicted_label = ACCENT_LABELS[predicted_idx]
+
+    # ── Stage 2: If Indian, run sub-accent classifier ──
+    sub_result = None
+    if predicted_label == "indian":
+        indian_model = get_indian_model(clip_length)
+        if indian_model is not None:
+            with torch.no_grad():
+                indian_logits = indian_model(**inputs).logits
+            indian_probs = torch.softmax(indian_logits, dim=-1)[0]
+
+            # Build combined result with Indian sub-accents
+            result = {}
+            for i, label in enumerate(DISPLAY_LABELS):
+                if ACCENT_LABELS[i] == "indian":
+                    # Replace single "Indian" with sub-accent breakdown
+                    indian_confidence = float(probs[i])
+                    for j, sub_label in enumerate(INDIAN_DISPLAY_LABELS):
+                        result[sub_label] = indian_confidence * float(indian_probs[j])
+                else:
+                    result[label] = float(probs[i])
+
+            note = get_accuracy_note(clip_length)
+            note += "\n🔍 Indian accent detected → Sub-regional classification applied"
+            return result, note
+
+    # No Indian detected or no Stage 2 model — return Stage 1 results
     result = {DISPLAY_LABELS[i]: float(probs[i]) for i in range(len(DISPLAY_LABELS))}
-
-    # Accuracy note
     note = get_accuracy_note(clip_length)
-
     return result, note
 
 
 def build_demo(share: bool = False):
     """Build and launch the Gradio interface."""
 
-    # Clip length choices
     clip_choices = [f"{cl}s" for cl in CLIP_LENGTHS]
 
-    # Check for sample audio files
     examples = []
     if os.path.exists(SAMPLES_DIR):
         for f in sorted(os.listdir(SAMPLES_DIR)):
             if f.endswith((".wav", ".mp3", ".flac", ".ogg")):
                 examples.append([os.path.join(SAMPLES_DIR, f), "3s"])
 
+    # Check which models are available
+    has_stage2 = os.path.exists(os.path.join(INDIAN_MODEL_OUTPUT_DIR, "clips_3s"))
+
     with gr.Blocks(
         title="🎙️ Indian Accent Detector",
         theme=gr.themes.Soft(
-            primary_hue="indigo",
-            secondary_hue="blue",
-            neutral_hue="slate",
+            primary_hue="blue",
+            secondary_hue="orange",
         ),
     ) as demo:
         gr.Markdown(
-            """
+            f"""
             # 🎙️ Indian Accent Detector
 
-            A 6-class English accent classifier with **hierarchical Indian sub-accent detection**.
+            A **two-stage** English accent classifier with **hierarchical Indian sub-accent detection**.
 
-            ### 🔬 Research Differentiators
-            1. **Short-clip benchmarking**: accuracy curves across 1s, 2s, and 3s clips — 
-               nobody in the literature benchmarks on clips this short
-            2. **Hierarchical Indian sub-accents**: North / South / West Indian classification 
-               using the IndicAccentDb dataset
-            3. **Standardized evaluation**: per-class F1, confusion matrices, and clip-length curves 
-               on a single reproducible public split
+            ### How It Works
+            1. **Stage 1**: Classifies accent as 🇺🇸 American · 🇬🇧 British · 🇨🇦 Canadian · 🇮🇳 Indian
+            2. **Stage 2**: If Indian detected → further classifies as North (Hindi Belt) · South (Dravidian) · West (Gujarati)
+
+            {"✅ Both stages loaded!" if has_stage2 else "⚠️ Stage 2 (Indian sub-accents) not trained yet. Run `python prepare_indian.py`"}
 
             ---
             """
@@ -236,7 +271,6 @@ def build_demo(share: bool = False):
             outputs=[output_label, accuracy_note],
         )
 
-        # Examples (if sample files exist)
         if examples:
             gr.Examples(
                 examples=examples,
@@ -249,8 +283,8 @@ def build_demo(share: bool = False):
         gr.Markdown(
             """
             ---
-            **Supported accents**: 🇺🇸 American · 🇬🇧 British · 🇨🇦 Canadian · 
-            🇮🇳 Indian-North · 🇮🇳 Indian-South · 🇮🇳 Indian-West
+            **Stage 1**: 🇺🇸 American · 🇬🇧 British · 🇨🇦 Canadian · 🇮🇳 Indian  
+            **Stage 2** (if Indian): 🇮🇳 North (Hindi Belt) · 🇮🇳 South (Dravidian) · 🇮🇳 West (Gujarati)
 
             *Powered by [Wav2Vec2](https://huggingface.co/facebook/wav2vec2-base) · 
             Trained on [Westbrook](https://huggingface.co/datasets/westbrook/English_Accent_DataSet) + 
@@ -261,27 +295,8 @@ def build_demo(share: bool = False):
     demo.launch(share=share)
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Launch Gradio demo for Indian Accent Detection."
-    )
-    parser.add_argument(
-        "--share",
-        action="store_true",
-        help="Create a public Gradio share link.",
-    )
-    parser.add_argument(
-        "--dry_run",
-        action="store_true",
-        help="Launch the demo without loading models (for UI testing).",
-    )
-    args = parser.parse_args()
-
-    if args.dry_run:
-        logger.info("🏃 DRY RUN — launching demo (models may not be loaded)")
-
-    build_demo(share=args.share)
-
-
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--share", action="store_true", help="Create public link")
+    args = parser.parse_args()
+    build_demo(share=args.share)
