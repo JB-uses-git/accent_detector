@@ -10,18 +10,16 @@ import os
 # ─── Random Seed ──────────────────────────────────────────────────────────────
 SEED = 42
 
-# ─── Accent Labels (7-class) ─────────────────────────────────────────────────
+# ─── Accent Labels (4-class) ─────────────────────────────────────────────────
 ACCENT_LABELS = [
-    "american", "british", "canadian",
-    "indian_north", "indian_south", "indian_east", "indian_west",
+    "american", "british", "canadian", "indian",
 ]
 NUM_LABELS = len(ACCENT_LABELS)
 LABEL2ID = {label: idx for idx, label in enumerate(ACCENT_LABELS)}
 ID2LABEL = {idx: label for idx, label in enumerate(ACCENT_LABELS)}
 
 DISPLAY_LABELS = [
-    "🇺🇸 American", "🇬🇧 British", "🇨🇦 Canadian",
-    "🇮🇳 Indian-North", "🇮🇳 Indian-South", "🇮🇳 Indian-East", "🇮🇳 Indian-West",
+    "🇺🇸 American", "🇬🇧 British", "🇨🇦 Canadian", "🇮🇳 Indian",
 ]
 
 # ─── Clip Lengths ─────────────────────────────────────────────────────────────
@@ -45,75 +43,19 @@ MODEL_OUTPUT_DIR = "accent-classifier-final"
 RESULTS_DIR = "results"
 SAMPLES_DIR = "samples"
 
-# ─── Dataset Sources ─────────────────────────────────────────────────────────
-# Primary: Westbrook English Accent Dataset (79 hrs, 53K samples, Parquet)
-# Available freely on HuggingFace — no gating, no auth required
+# ─── Dataset Source ───────────────────────────────────────────────────────────
+# Westbrook English Accent Dataset (79 hrs, 53K samples, Parquet, free)
 ACCENT_DATASET = "westbrook/English_Accent_DataSet"
-SVARAH_DATASET = "iitb-monolingual/svarah"
 
-# ─── Westbrook Accent Mapping ────────────────────────────────────────────────
-# Maps Westbrook accent tags to our label scheme
-# Note: "Australian" is not available in any open HF dataset (Common Voice
-# was removed from HF in Oct 2025). We use 3 global + 4 Indian = 7 classes.
+# ─── Accent Mapping ──────────────────────────────────────────────────────────
+# Maps Westbrook ClassLabel names to our label scheme
 ACCENT_MAP = {
     "American": "american",
     "English": "british",
     "Canadian": "canadian",
+    "Indian": "indian",
 }
 TARGET_ACCENTS = list(ACCENT_MAP.keys())
-
-# ─── Svarah Region Mapping ───────────────────────────────────────────────────
-# Maps Indian states/regions from Svarah dataset to our 4 sub-accent classes
-SVARAH_REGION_MAP = {
-    # North India
-    "uttarakhand": "indian_north",
-    "himachal": "indian_north",
-    "himachal_pradesh": "indian_north",
-    "punjab": "indian_north",
-    "haryana": "indian_north",
-    "delhi": "indian_north",
-    "up": "indian_north",
-    "uttar_pradesh": "indian_north",
-    "rajasthan": "indian_north",
-    "jammu_kashmir": "indian_north",
-    "jammu": "indian_north",
-    "kashmir": "indian_north",
-    "chandigarh": "indian_north",
-    "ladakh": "indian_north",
-    # West India
-    "gujarat": "indian_west",
-    "maharashtra": "indian_west",
-    "goa": "indian_west",
-    "madhya_pradesh": "indian_west",
-    "mp": "indian_west",
-    "chhattisgarh": "indian_west",
-    "daman": "indian_west",
-    "dadra": "indian_west",
-    # East India
-    "west_bengal": "indian_east",
-    "odisha": "indian_east",
-    "assam": "indian_east",
-    "bihar": "indian_east",
-    "jharkhand": "indian_east",
-    "northeast": "indian_east",
-    "meghalaya": "indian_east",
-    "manipur": "indian_east",
-    "mizoram": "indian_east",
-    "nagaland": "indian_east",
-    "tripura": "indian_east",
-    "arunachal_pradesh": "indian_east",
-    "sikkim": "indian_east",
-    # South India
-    "tamil_nadu": "indian_south",
-    "kerala": "indian_south",
-    "karnataka": "indian_south",
-    "andhra": "indian_south",
-    "andhra_pradesh": "indian_south",
-    "telangana": "indian_south",
-    "pondicherry": "indian_south",
-    "puducherry": "indian_south",
-    "lakshadweep": "indian_south",
-}
 
 # ─── Dry Run ──────────────────────────────────────────────────────────────────
 DRY_RUN_SAMPLES_PER_CLASS = 50

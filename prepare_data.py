@@ -1,9 +1,9 @@
 """
 Phase 2 — Data Preparation Pipeline.
 
-Loads Westbrook English Accent Dataset (global accents) and Svarah (Indian
-sub-accents), merges, creates 3 clip-length variants, performs stratified
-split, and saves reproducible processed datasets.
+Loads Westbrook English Accent Dataset, filters to target accents,
+creates 3 clip-length variants, performs stratified split, and saves
+reproducible processed datasets.
 
 Usage:
     python prepare_data.py [--dry_run]
@@ -22,7 +22,7 @@ from datasets import (
     Audio,
     Dataset,
     DatasetDict,
-    concatenate_datasets,
+    Value,
     load_dataset,
 )
 from sklearn.model_selection import train_test_split
@@ -40,8 +40,6 @@ from config import (
     PROCESSED_DATA_DIR,
     SAMPLE_RATE,
     SEED,
-    SVARAH_DATASET,
-    SVARAH_REGION_MAP,
     TARGET_ACCENTS,
     TEST_RATIO,
     TRAIN_RATIO,
@@ -58,17 +56,32 @@ logger = logging.getLogger(__name__)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# STEP A — Load Westbrook English Accent Dataset (global accents)
+# STEP A — Load Westbrook English Accent Dataset
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def load_global_accents(dry_run: bool = False) -> Dataset:
-    """Load Westbrook English Accent Dataset, filter to target accents."""
+def load_accent_data(dry_run: bool = False) -> Dataset:
+    """Load Westbrook dataset, convert ClassLabel to string, filter accents."""
     logger.info("STEP A — Loading Westbrook English Accent Dataset")
 
     ds = load_dataset(ACCENT_DATASET, split="train")
     logger.info("  Loaded %d total samples", len(ds))
 
-    # Filter to target accents (American, English, Canadian)
+    # The 'accent' column is a ClassLabel (integer-encoded).
+    # Convert to string names so our filter/mapping works.
+    accent_feature = ds.features["accent"]
+    logger.info("  Accent feature type: %s", type(accent_feature).__name__)
+
+    if hasattr(accent_feature, "int2str"):
+        logger.info("  Converting ClassLabel integers to string names...")
+        label_names = accent_feature.names
+        logger.info("  Available accents: %s", label_names)
+        ds = ds.cast_column("accent", Value("string"))
+        # After cast, values become the string names automatically
+        # Verify
+        sample_accents = set(ds[:10]["accent"])
+        logger.info("  Sample accent values after cast: %s", sample_accents)
+
+    # Filter to target accents
     ds = ds.filter(
         lambda batch: [a in TARGET_ACCENTS for a in batch["accent"]],
         batched=True,
@@ -76,7 +89,12 @@ def load_global_accents(dry_run: bool = False) -> Dataset:
     )
     logger.info("  After accent filter: %d samples", len(ds))
 
-    # Map accent names: English→british, American→american, etc.
+    if len(ds) == 0:
+        # Debug: print what values we actually have
+        logger.error("  No samples matched! Check accent values vs TARGET_ACCENTS=%s", TARGET_ACCENTS)
+        raise ValueError("No samples matched the target accents. Check the accent mapping.")
+
+    # Map accent names: American→american, English→british, etc.
     def map_accent(example):
         example["accent"] = ACCENT_MAP[example["accent"]]
         return example
@@ -88,8 +106,6 @@ def load_global_accents(dry_run: bool = False) -> Dataset:
     if "raw_text" in ds.column_names:
         ds = ds.rename_column("raw_text", "sentence")
         columns_to_keep.append("sentence")
-    elif "sentence" in ds.column_names:
-        columns_to_keep.append("sentence")
 
     columns_to_remove = [c for c in ds.column_names if c not in columns_to_keep]
     ds = ds.remove_columns(columns_to_remove)
@@ -97,145 +113,12 @@ def load_global_accents(dry_run: bool = False) -> Dataset:
     if dry_run:
         ds = _subsample_per_class(ds, DRY_RUN_SAMPLES_PER_CLASS)
 
-    # Log class distribution
-    _log_class_distribution(ds, "Westbrook (global accents)")
+    _log_class_distribution(ds, "Filtered dataset")
     return ds
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# STEP B — Load Svarah (Indian sub-accents)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def load_svarah(dry_run: bool = False) -> Dataset:
-    """Load Svarah dataset and map speakers' states to Indian sub-regions."""
-    logger.info("STEP B — Loading Svarah (Indian sub-accents)")
-
-    try:
-        ds = load_dataset(SVARAH_DATASET, split="train")
-    except Exception as e:
-        logger.warning(
-            "⚠ Failed to load Svarah dataset: %s\n"
-            "  This dataset may be gated on HuggingFace. Run 'huggingface-cli login' first.\n"
-            "  Falling back to global-only mode (3 classes).",
-            str(e),
-        )
-        return None
-
-    logger.info("  Loaded %d samples from Svarah", len(ds))
-
-    # Identify the state/region column — try common column names
-    state_col = None
-    for candidate in ["state", "region", "native_region", "speaker_region", "dialect_region"]:
-        if candidate in ds.column_names:
-            state_col = candidate
-            break
-
-    if state_col is None:
-        logger.warning(
-            "  Could not find a state/region column in Svarah. Columns: %s\n"
-            "  Falling back to global-only mode.",
-            ds.column_names,
-        )
-        return None
-
-    logger.info("  Using column '%s' for state/region mapping", state_col)
-
-    # Normalize state names and map
-    def normalize_state_name(name):
-        """Normalize state name to match SVARAH_REGION_MAP keys."""
-        if name is None:
-            return None
-        return name.strip().lower().replace(" ", "_").replace("-", "_")
-
-    # Map each example to a sub-region
-    unmapped_count = 0
-    unmapped_states = set()
-
-    def map_region(example):
-        nonlocal unmapped_count, unmapped_states
-        raw_state = example.get(state_col, None)
-        normalized = normalize_state_name(raw_state)
-
-        if normalized and normalized in SVARAH_REGION_MAP:
-            example["accent"] = SVARAH_REGION_MAP[normalized]
-            example["_keep"] = True
-        else:
-            example["accent"] = None
-            example["_keep"] = False
-            unmapped_count += 1
-            if normalized:
-                unmapped_states.add(normalized)
-        return example
-
-    ds = ds.map(map_region)
-    logger.info("  Unmapped samples: %d (states: %s)", unmapped_count, unmapped_states)
-
-    # Filter out unmapped
-    ds = ds.filter(lambda x: x["_keep"])
-    ds = ds.remove_columns(["_keep"])
-    logger.info("  After filtering unmapped: %d samples", len(ds))
-
-    # Keep only audio + accent columns (and sentence if it exists)
-    columns_to_keep = ["audio", "accent"]
-    if "sentence" in ds.column_names:
-        columns_to_keep.append("sentence")
-    elif "text" in ds.column_names:
-        ds = ds.rename_column("text", "sentence")
-        columns_to_keep.append("sentence")
-
-    columns_to_remove = [c for c in ds.column_names if c not in columns_to_keep]
-    if columns_to_remove:
-        ds = ds.remove_columns(columns_to_remove)
-
-    if dry_run:
-        ds = _subsample_per_class(ds, DRY_RUN_SAMPLES_PER_CLASS)
-
-    _log_class_distribution(ds, "Svarah")
-    return ds
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# STEP C — Merge & balance
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def merge_datasets(global_ds: Dataset, svarah_ds: Dataset) -> Dataset:
-    """Concatenate global accents and Svarah datasets."""
-    logger.info("STEP C — Merging datasets")
-
-    if svarah_ds is not None and len(svarah_ds) > 0:
-        # Ensure both have the same columns
-        g_cols = set(global_ds.column_names)
-        s_cols = set(svarah_ds.column_names)
-        common_cols = g_cols & s_cols
-
-        if g_cols != s_cols:
-            for col in g_cols - common_cols:
-                global_ds = global_ds.remove_columns([col])
-            for col in s_cols - common_cols:
-                svarah_ds = svarah_ds.remove_columns([col])
-
-        merged = concatenate_datasets([global_ds, svarah_ds])
-        logger.info("  Merged: %d samples (Global: %d + Svarah: %d)",
-                     len(merged), len(global_ds), len(svarah_ds))
-    else:
-        merged = global_ds
-        logger.warning(
-            "  ⚠ No Svarah data — running in global-only mode (3 classes)"
-        )
-
-    _log_class_distribution(merged, "Merged")
-
-    # Warn about small classes
-    counts = _get_class_counts(merged)
-    for accent, count in counts.items():
-        if count < 500:
-            logger.warning("  ⚠ Class '%s' has only %d training clips (< 500)", accent, count)
-
-    return merged
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# STEP D — Create 3 clip-length variants
+# STEP B — Create 3 clip-length variants
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def create_clip_length_variants(
@@ -243,7 +126,7 @@ def create_clip_length_variants(
     extractor: Wav2Vec2FeatureExtractor,
 ) -> dict:
     """Create processed datasets for each clip length (1s, 2s, 3s)."""
-    logger.info("STEP D — Creating clip-length variants")
+    logger.info("STEP B — Creating clip-length variants")
 
     clip_datasets = {}
 
@@ -297,12 +180,12 @@ def create_clip_length_variants(
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# STEP E — Stratified split
+# STEP C — Stratified split
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def stratified_split(dataset: Dataset) -> DatasetDict:
     """Perform 80/10/10 stratified split and generate manifest CSV."""
-    logger.info("STEP E — Stratified split (80/10/10)")
+    logger.info("STEP C — Stratified split (80/10/10)")
 
     labels = dataset["accent"]
     indices = list(range(len(dataset)))
@@ -315,7 +198,7 @@ def stratified_split(dataset: Dataset) -> DatasetDict:
         random_state=SEED,
     )
 
-    # Second split: 50/50 of temp → val and test (10% each of original)
+    # Second split: 50/50 of temp → val and test
     temp_labels = [labels[i] for i in temp_idx]
     val_idx, test_idx = train_test_split(
         temp_idx,
@@ -358,14 +241,13 @@ def stratified_split(dataset: Dataset) -> DatasetDict:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# STEP F — Validation
+# STEP D — Validation
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def validate_splits(clip_datasets: dict):
     """Validate processed datasets and print summary statistics."""
-    logger.info("STEP F — Validation")
+    logger.info("STEP D — Validation")
 
-    # Load manifest and check for overlaps
     manifest_path = os.path.join(PROCESSED_DATA_DIR, "split_manifest.csv")
     if os.path.exists(manifest_path):
         manifest = pd.read_csv(manifest_path)
@@ -373,20 +255,12 @@ def validate_splits(clip_datasets: dict):
         val_hashes = set(manifest[manifest["split"] == "val"]["sha256"])
         test_hashes = set(manifest[manifest["split"] == "test"]["sha256"])
 
-        train_val_overlap = train_hashes & val_hashes
-        train_test_overlap = train_hashes & test_hashes
-        val_test_overlap = val_hashes & test_hashes
-
-        assert len(train_val_overlap) == 0, f"Train/Val overlap: {len(train_val_overlap)} samples!"
-        assert len(train_test_overlap) == 0, f"Train/Test overlap: {len(train_test_overlap)} samples!"
-        assert len(val_test_overlap) == 0, f"Val/Test overlap: {len(val_test_overlap)} samples!"
+        assert len(train_hashes & val_hashes) == 0, "Train/Val overlap!"
+        assert len(train_hashes & test_hashes) == 0, "Train/Test overlap!"
+        assert len(val_hashes & test_hashes) == 0, "Val/Test overlap!"
         logger.info("  ✅ No overlap between train/val/test splits")
-    else:
-        logger.warning("  ⚠ Manifest file not found — skipping overlap check")
 
-    # Print per-class counts per split per clip length
     data_stats = {"clip_lengths": {}}
-
     for clip_len, ds_dict in clip_datasets.items():
         logger.info("  ── %ds clips ──", clip_len)
         clip_stats = {}
@@ -406,7 +280,6 @@ def validate_splits(clip_datasets: dict):
 
         data_stats["clip_lengths"][f"{clip_len}s"] = clip_stats
 
-    # Save data_stats.json
     stats_path = os.path.join(PROCESSED_DATA_DIR, "data_stats.json")
     with open(stats_path, "w") as f:
         json.dump(data_stats, f, indent=2)
@@ -473,30 +346,23 @@ def main():
     if args.dry_run:
         logger.info("🏃 DRY RUN MODE — %d samples per class", DRY_RUN_SAMPLES_PER_CLASS)
 
-    # Set seeds
     np.random.seed(SEED)
 
-    # ── Step A: Global accents (Westbrook) ──
-    global_ds = load_global_accents(dry_run=args.dry_run)
-
-    # ── Step B: Svarah ──
-    svarah_ds = load_svarah(dry_run=args.dry_run)
-
-    # ── Step C: Merge ──
-    merged = merge_datasets(global_ds, svarah_ds)
+    # ── Step A: Load and filter ──
+    ds = load_accent_data(dry_run=args.dry_run)
 
     # ── Resample audio to 16kHz ──
     logger.info("Resampling all audio to %d Hz...", SAMPLE_RATE)
-    merged = merged.cast_column("audio", Audio(sampling_rate=SAMPLE_RATE))
+    ds = ds.cast_column("audio", Audio(sampling_rate=SAMPLE_RATE))
 
-    # ── Step E: Stratified split ──
-    split_dict = stratified_split(merged)
+    # ── Step C: Stratified split ──
+    split_dict = stratified_split(ds)
 
-    # ── Step D: Create clip-length variants ──
+    # ── Step B: Create clip-length variants ──
     extractor = Wav2Vec2FeatureExtractor.from_pretrained(MODEL_NAME)
     clip_datasets = create_clip_length_variants(split_dict, extractor)
 
-    # ── Step F: Validate ──
+    # ── Step D: Validate ──
     validate_splits(clip_datasets)
 
     logger.info("=" * 60)
