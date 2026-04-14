@@ -178,7 +178,7 @@ def build_demo(share: bool = False):
             """
             # 🎙️ Indian Accent Detector
 
-            An 8-class English accent classifier with **hierarchical Indian sub-accent detection**.
+            A 7-class English accent classifier with **hierarchical Indian sub-accent detection**.
 
             ### 🔬 Research Differentiators
             1. **Short-clip benchmarking**: accuracy curves across 1s, 2s, and 3s clips — 
@@ -222,7 +222,7 @@ def build_demo(share: bool = False):
 
             with gr.Column(scale=1):
                 output_label = gr.Label(
-                    num_top_classes=8,
+                    num_top_classes=7,
                     label="🌍 Accent Prediction",
                 )
                 accuracy_note = gr.Textbox(
@@ -249,7 +249,7 @@ def build_demo(share: bool = False):
         gr.Markdown(
             """
             ---
-            **Supported accents**: 🇺🇸 American · 🇬🇧 British · 🇦🇺 Australian · 🇨🇦 Canadian · 
+            **Supported accents**: 🇺🇸 American · 🇬🇧 British · 🇨🇦 Canadian · 
             🇮🇳 Indian-North · 🇮🇳 Indian-South · 🇮🇳 Indian-East · 🇮🇳 Indian-West
 
             *Powered by [Wav2Vec2](https://huggingface.co/facebook/wav2vec2-base) · 

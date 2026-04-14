@@ -10,9 +10,9 @@ import os
 # ─── Random Seed ──────────────────────────────────────────────────────────────
 SEED = 42
 
-# ─── Accent Labels (8-class) ─────────────────────────────────────────────────
+# ─── Accent Labels (7-class) ─────────────────────────────────────────────────
 ACCENT_LABELS = [
-    "american", "british", "australian", "canadian",
+    "american", "british", "canadian",
     "indian_north", "indian_south", "indian_east", "indian_west",
 ]
 NUM_LABELS = len(ACCENT_LABELS)
@@ -20,7 +20,7 @@ LABEL2ID = {label: idx for idx, label in enumerate(ACCENT_LABELS)}
 ID2LABEL = {idx: label for idx, label in enumerate(ACCENT_LABELS)}
 
 DISPLAY_LABELS = [
-    "🇺🇸 American", "🇬🇧 British", "🇦🇺 Australian", "🇨🇦 Canadian",
+    "🇺🇸 American", "🇬🇧 British", "🇨🇦 Canadian",
     "🇮🇳 Indian-North", "🇮🇳 Indian-South", "🇮🇳 Indian-East", "🇮🇳 Indian-West",
 ]
 
@@ -46,19 +46,21 @@ RESULTS_DIR = "results"
 SAMPLES_DIR = "samples"
 
 # ─── Dataset Sources ─────────────────────────────────────────────────────────
-COMMON_VOICE_DATASET = "mozilla-foundation/common_voice_17_0"
-COMMON_VOICE_LANG = "en"
+# Primary: Westbrook English Accent Dataset (79 hrs, 53K samples, Parquet)
+# Available freely on HuggingFace — no gating, no auth required
+ACCENT_DATASET = "westbrook/English_Accent_DataSet"
 SVARAH_DATASET = "iitb-monolingual/svarah"
 
-# ─── Common Voice Accent Mapping ─────────────────────────────────────────────
-# Maps Common Voice accent tags to our label scheme
-CV_ACCENT_MAP = {
-    "us": "american",
-    "england": "british",
-    "australia": "australian",
-    "canada": "canadian",
+# ─── Westbrook Accent Mapping ────────────────────────────────────────────────
+# Maps Westbrook accent tags to our label scheme
+# Note: "Australian" is not available in any open HF dataset (Common Voice
+# was removed from HF in Oct 2025). We use 3 global + 4 Indian = 7 classes.
+ACCENT_MAP = {
+    "American": "american",
+    "English": "british",
+    "Canadian": "canadian",
 }
-CV_TARGET_ACCENTS = list(CV_ACCENT_MAP.keys())
+TARGET_ACCENTS = list(ACCENT_MAP.keys())
 
 # ─── Svarah Region Mapping ───────────────────────────────────────────────────
 # Maps Indian states/regions from Svarah dataset to our 4 sub-accent classes
