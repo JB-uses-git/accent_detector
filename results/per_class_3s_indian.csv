@@ -1,0 +1,4 @@
+accent,precision,recall,f1,support
+indian_north,0.875,0.8537,0.8642,82
+indian_south,0.9048,0.9268,0.9157,82
+indian_west,0.8462,0.8462,0.8462,65

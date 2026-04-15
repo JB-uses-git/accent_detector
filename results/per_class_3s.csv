@@ -1,0 +1,5 @@
+accent,precision,recall,f1,support
+american,0.9412,0.9275,0.9343,138
+british,0.9107,0.9385,0.9244,130
+canadian,0.8846,0.8704,0.8774,108
+indian,0.9556,0.9556,0.9556,135

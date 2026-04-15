@@ -1,0 +1,5 @@
+,american,british,canadian,indian
+american,0.93,0.03,0.03,0.01
+british,0.04,0.94,0.01,0.01
+canadian,0.06,0.04,0.87,0.03
+indian,0.01,0.02,0.02,0.96
