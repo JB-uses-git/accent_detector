@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 # ─── Constants ────────────────────────────────────────────────────────────────
 CLIP_LENGTH = 3  # Always use 3s clips
 MAX_SAMPLES = SAMPLE_RATE * CLIP_LENGTH
-TEMPERATURE = 3.0  # Softens predictions to look more natural
+TEMPERATURE = 8.0  # Softens predictions to look more natural
 
 # ─── Model Cache ──────────────────────────────────────────────────────────────
 _stage1_model = None
