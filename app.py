@@ -39,6 +39,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ─── Constants ────────────────────────────────────────────────────────────────
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # Directory where app.py lives
 CLIP_LENGTH = 3  # Always use 3s clips
 MAX_SAMPLES = SAMPLE_RATE * CLIP_LENGTH
 TEMPERATURE = 8.0  # Softens predictions to look more natural
@@ -59,22 +60,27 @@ def get_extractor():
 def get_stage1_model():
     global _stage1_model
     if _stage1_model is None:
-        model_path = os.path.join(MODEL_OUTPUT_DIR, f"clips_{CLIP_LENGTH}s")
+        model_path = os.path.join(BASE_DIR, MODEL_OUTPUT_DIR, f"clips_{CLIP_LENGTH}s")
+        logger.info("Stage 1 model path: %s (exists: %s)", model_path, os.path.exists(model_path))
         if not os.path.exists(model_path):
             return None
         _stage1_model = Wav2Vec2ForSequenceClassification.from_pretrained(model_path)
         _stage1_model.eval()
+        logger.info("✅ Stage 1 model loaded!")
     return _stage1_model
 
 
 def get_stage2_model():
     global _stage2_model
     if _stage2_model is None:
-        model_path = os.path.join(INDIAN_MODEL_OUTPUT_DIR, f"clips_{CLIP_LENGTH}s")
+        model_path = os.path.join(BASE_DIR, INDIAN_MODEL_OUTPUT_DIR, f"clips_{CLIP_LENGTH}s")
+        logger.info("Stage 2 model path: %s (exists: %s)", model_path, os.path.exists(model_path))
         if not os.path.exists(model_path):
+            logger.warning("⚠️ Stage 2 model NOT found — Indian sub-accent classification disabled")
             return None
         _stage2_model = Wav2Vec2ForSequenceClassification.from_pretrained(model_path)
         _stage2_model.eval()
+        logger.info("✅ Stage 2 model loaded!")
     return _stage2_model
 
 
@@ -224,8 +230,8 @@ button.primary:hover {
 def build_demo(share: bool = False):
     """Build and launch the Gradio interface."""
 
-    has_stage1 = os.path.exists(os.path.join(MODEL_OUTPUT_DIR, f"clips_{CLIP_LENGTH}s"))
-    has_stage2 = os.path.exists(os.path.join(INDIAN_MODEL_OUTPUT_DIR, f"clips_{CLIP_LENGTH}s"))
+    has_stage1 = os.path.exists(os.path.join(BASE_DIR, MODEL_OUTPUT_DIR, f"clips_{CLIP_LENGTH}s"))
+    has_stage2 = os.path.exists(os.path.join(BASE_DIR, INDIAN_MODEL_OUTPUT_DIR, f"clips_{CLIP_LENGTH}s"))
 
     with gr.Blocks(
         title="Indian Accent Detector",
